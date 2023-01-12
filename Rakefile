@@ -18,7 +18,7 @@ end
 CLEAN.include 'lib/*.o', 'lib/*.so', 'lib/*.so.*', 'lib/*.a', 'lib/*.bundle', 'lib/*.jar', 'pkg', 'tmp'
 
 require 'yard'
-YARD_FILES = FileList['ext/extralite/extralite.c', 'lib/extralite.rb', 'lib/sequel/adapters/extralite.rb']
+YARD_FILES = FileList['ext/extralite/extralite.c', 'lib/extralite.rb']
 
 YARD::Rake::YardocTask.new do |t|
   t.files   = YARD_FILES

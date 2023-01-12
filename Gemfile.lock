@@ -12,7 +12,6 @@ GEM
     rake (13.0.6)
     rake-compiler (1.1.6)
       rake
-    sequel (5.51.0)
     simplecov (0.17.1)
       docile (~> 1.1)
       json (>= 1.8, < 3)
@@ -29,7 +28,6 @@ DEPENDENCIES
   extralite!
   minitest (= 5.15.0)
   rake-compiler (= 1.1.6)
-  sequel (= 5.51.0)
   simplecov (= 0.17.1)
   yard (= 0.9.27)
 
