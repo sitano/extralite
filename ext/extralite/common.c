@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include "extralite.h"
 
 static inline VALUE get_column_value(sqlite3_stmt *stmt, int col, int type) {
@@ -100,21 +101,29 @@ static inline VALUE get_column_names(sqlite3_stmt *stmt, int column_count) {
   return arr;
 }
 
-static inline VALUE row_to_hash(sqlite3_stmt *stmt, int column_count, VALUE column_names) {
-  VALUE row = rb_hash_new();
+static inline row_estimate_t row_to_hash(query_ctx *ctx, int column_count, VALUE column_names) {
+  sqlite3_stmt *stmt = ctx->stmt;
+  row_estimate_t row = { rb_hash_new(), 0UL };
+  bool cnt_mem = ctx->limit_bytes > 0 ? true : false;
   for (int i = 0; i < column_count; i++) {
     VALUE value = get_column_value(stmt, i, sqlite3_column_type(stmt, i));
-    rb_hash_aset(row, RARRAY_AREF(column_names, i), value);
+    rb_hash_aset(row.row, RARRAY_AREF(column_names, i), value);
+    if (cnt_mem) row.size += rb_obj_memsize_of(value);
   }
+  if (cnt_mem) row.size += rb_obj_memsize_of(row.row);
   return row;
 }
 
-static inline VALUE row_to_ary(sqlite3_stmt *stmt, int column_count) {
-  VALUE row = rb_ary_new2(column_count);
+static inline row_estimate_t row_to_ary(query_ctx *ctx, int column_count) {
+  sqlite3_stmt *stmt = ctx->stmt;
+  row_estimate_t row = { rb_ary_new2(column_count), 0UL };
+  bool cnt_mem = ctx->limit_bytes > 0 ? true : false;
   for (int i = 0; i < column_count; i++) {
     VALUE value = get_column_value(stmt, i, sqlite3_column_type(stmt, i));
-    rb_ary_push(row, value);
+    rb_ary_push(row.row, value);
+    if (cnt_mem) row.size += rb_obj_memsize_of(value);
   }
+  if (cnt_mem) row.size += rb_obj_memsize_of(row.row);
   return row;
 }
 
@@ -262,7 +271,8 @@ VALUE cleanup_stmt(query_ctx *ctx) {
 VALUE safe_query_hash(query_ctx *ctx) {
   VALUE result = ctx->self;
   int yield_to_block = rb_block_given_p();
-  VALUE row;
+  row_estimate_t row;
+  unsigned long limit = 0, iter = 0;
   int column_count;
   VALUE column_names;
 
@@ -273,13 +283,16 @@ VALUE safe_query_hash(query_ctx *ctx) {
   if (!yield_to_block) result = rb_ary_new();
 
   while (stmt_iterate(ctx->stmt, ctx->sqlite3_db)) {
-    row = row_to_hash(ctx->stmt, column_count, column_names);
-    if (yield_to_block) rb_yield(row);
-    else                rb_ary_push(result, row);
+    row = row_to_hash(ctx, column_count, column_names);
+    limit += row.size; ++ iter;
+    if (yield_to_block) rb_yield(row.row);
+    else                rb_ary_push(result, row.row);
+    if (limit > ctx->limit_bytes)
+      rb_raise(cLimitError, "Query bytes limit exceeded %d > %d: %d rows", limit, ctx->limit_bytes, iter);
   }
 
   RB_GC_GUARD(column_names);
-  RB_GC_GUARD(row);
+  RB_GC_GUARD(row.row);
   RB_GC_GUARD(result);
   return result;
 }
@@ -288,7 +301,8 @@ VALUE safe_query_ary(query_ctx *ctx) {
   int column_count;
   VALUE result = ctx->self;
   int yield_to_block = rb_block_given_p();
-  VALUE row;
+  row_estimate_t row;
+  unsigned long limit = 0, iter = 0;
 
   column_count = sqlite3_column_count(ctx->stmt);
 
@@ -296,30 +310,39 @@ VALUE safe_query_ary(query_ctx *ctx) {
   if (!yield_to_block) result = rb_ary_new();
 
   while (stmt_iterate(ctx->stmt, ctx->sqlite3_db)) {
-    row = row_to_ary(ctx->stmt, column_count);
-    if (yield_to_block) rb_yield(row);
-    else                rb_ary_push(result, row);
+    row = row_to_ary(ctx, column_count);
+    limit += row.size; ++ iter;
+    if (yield_to_block) rb_yield(row.row);
+    else                rb_ary_push(result, row.row);
+    if (limit > ctx->limit_bytes)
+      rb_raise(cLimitError, "Query bytes limit exceeded %d > %d: %d rows", limit, ctx->limit_bytes, iter);
   }
 
-  RB_GC_GUARD(row);
+  RB_GC_GUARD(row.row);
   RB_GC_GUARD(result);
   return result;
 }
 
 VALUE safe_query_single_row(query_ctx *ctx) {
   int column_count;
-  VALUE row = Qnil;
+  row_estimate_t row = { Qnil, 0UL };
+  unsigned long limit = 0, iter = 0;
   VALUE column_names;
 
   column_count = sqlite3_column_count(ctx->stmt);
   column_names = get_column_names(ctx->stmt, column_count);
 
-  if (stmt_iterate(ctx->stmt, ctx->sqlite3_db))
-    row = row_to_hash(ctx->stmt, column_count, column_names);
+  if (stmt_iterate(ctx->stmt, ctx->sqlite3_db)) {
+    row = row_to_hash(ctx, column_count, column_names);
+    limit += row.size; ++ iter;
+  }
 
-  RB_GC_GUARD(row);
+  if (limit > ctx->limit_bytes)
+      rb_raise(cLimitError, "Query bytes limit exceeded %d > %d: %d rows", limit, ctx->limit_bytes, iter);
+
+  RB_GC_GUARD(row.row);
   RB_GC_GUARD(column_names);
-  return row;
+  return row.row;
 }
 
 VALUE safe_query_single_column(query_ctx *ctx) {
@@ -338,6 +361,7 @@ VALUE safe_query_single_column(query_ctx *ctx) {
   while (stmt_iterate(ctx->stmt, ctx->sqlite3_db)) {
     value = get_column_value(ctx->stmt, 0, sqlite3_column_type(ctx->stmt, 0));
     if (yield_to_block) rb_yield(value); else rb_ary_push(result, value);
+    // TODO: impl cLimitError
   }
 
   RB_GC_GUARD(value);
@@ -355,6 +379,8 @@ VALUE safe_query_single_value(query_ctx *ctx) {
 
   if (stmt_iterate(ctx->stmt, ctx->sqlite3_db))
     value = get_column_value(ctx->stmt, 0, sqlite3_column_type(ctx->stmt, 0));
+
+  // TODO: impl cLimitError
 
   RB_GC_GUARD(value);
   return value;

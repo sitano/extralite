@@ -6,6 +6,7 @@ VALUE cError;
 VALUE cSQLError;
 VALUE cBusyError;
 VALUE cInterruptError;
+VALUE cLimitError;
 
 ID ID_KEYS;
 ID ID_NEW;
@@ -31,6 +32,7 @@ static const rb_data_type_t Database_type = {
 static VALUE Database_allocate(VALUE klass) {
   Database_t *db = ALLOC(Database_t);
   db->sqlite3_db = 0;
+  db->query_limit_bytes = 0;
   return TypedData_Wrap_Struct(klass, &Database_type, db);
 }
 
@@ -136,7 +138,7 @@ static inline VALUE Database_perform_query(int argc, VALUE *argv, VALUE self, VA
   GetOpenDatabase(self, db);
   prepare_multi_stmt(db->sqlite3_db, &stmt, sql);
   bind_all_parameters(stmt, argc - 1, argv + 1);
-  query_ctx ctx = { self, db->sqlite3_db, stmt };
+  query_ctx ctx = { self, db->sqlite3_db, stmt, Qnil, db->query_limit_bytes };
 
   return rb_ensure(SAFE(call), (VALUE)&ctx, SAFE(cleanup_stmt), (VALUE)&ctx);
 }
@@ -289,7 +291,7 @@ VALUE Database_execute_multi(VALUE self, VALUE sql, VALUE params_array) {
   // prepare query ctx
   GetOpenDatabase(self, db);
   prepare_single_stmt(db->sqlite3_db, &stmt, sql);
-  query_ctx ctx = { self, db->sqlite3_db, stmt, params_array };
+  query_ctx ctx = { self, db->sqlite3_db, stmt, params_array, db->query_limit_bytes };
 
   return rb_ensure(SAFE(safe_execute_multi), (VALUE)&ctx, SAFE(cleanup_stmt), (VALUE)&ctx);
 }
@@ -554,6 +556,19 @@ VALUE Database_status(int argc, VALUE* argv, VALUE self) {
   return rb_ary_new3(2, INT2NUM(cur), INT2NUM(hwm));
 }
 
+VALUE Database_set_query_limit_bytes(VALUE self, VALUE limit) {
+  Database_t *db;
+  GetDatabase(self, db);
+  db->query_limit_bytes = NUM2ULONG(limit);
+  return self;
+}
+
+VALUE Database_get_query_limit_bytes(VALUE self) {
+  Database_t *db;
+  GetDatabase(self, db);
+  return ULONG2NUM(db->query_limit_bytes);
+}
+
 void Init_ExtraliteDatabase(void) {
   VALUE mExtralite = rb_define_module("Extralite");
   rb_define_singleton_method(mExtralite, "runtime_status", Extralite_runtime_status, -1);
@@ -581,6 +596,8 @@ void Init_ExtraliteDatabase(void) {
   rb_define_method(cDatabase, "query_single_value", Database_query_single_value, -1);
   rb_define_method(cDatabase, "status", Database_status, -1);
   rb_define_method(cDatabase, "transaction_active?", Database_transaction_active_p, 0);
+  rb_define_method(cDatabase, "query_limit_bytes=", Database_set_query_limit_bytes, 1);
+  rb_define_method(cDatabase, "query_limit_bytes", Database_get_query_limit_bytes, 0);
 
 #ifdef HAVE_SQLITE3_LOAD_EXTENSION
   rb_define_method(cDatabase, "load_extension", Database_load_extension, 1);
@@ -590,10 +607,12 @@ void Init_ExtraliteDatabase(void) {
   cSQLError = rb_define_class_under(mExtralite, "SQLError", cError);
   cBusyError = rb_define_class_under(mExtralite, "BusyError", cError);
   cInterruptError = rb_define_class_under(mExtralite, "InterruptError", cError);
+  cLimitError = rb_define_class_under(mExtralite, "LimitError", cError);
   rb_gc_register_mark_object(cError);
   rb_gc_register_mark_object(cSQLError);
   rb_gc_register_mark_object(cBusyError);
   rb_gc_register_mark_object(cInterruptError);
+  rb_gc_register_mark_object(cLimitError);
 
   ID_KEYS   = rb_intern("keys");
   ID_NEW    = rb_intern("new");

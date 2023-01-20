@@ -266,8 +266,85 @@ end
     t.join
   end
 
-  def test_database_status
-    assert_operator 0, :<, @db.status(Extralite::SQLITE_DBSTATUS_SCHEMA_USED).first
+  def test_database_limit
+    sql = ->(n) { <<-SQL
+      WITH RECURSIVE
+        fibo (curr, next)
+      AS
+      ( SELECT 1,1
+        UNION ALL
+        SELECT next, curr+next FROM fibo
+        LIMIT #{n} )
+      SELECT curr, next FROM fibo;
+    SQL
+    }
+    @db.query sql.call 2**16
+    @db.query_limit_bytes = 1024
+    @db.query sql.call 2**2  # 4 rows
+    assert_raises(Extralite::LimitError) {
+      @db.query sql.call 2**16 # 65536 rows
+    }
+  end
+
+  def test_block_limit
+    require "objspace"
+
+    sql = ->(n) { <<-SQL
+      WITH RECURSIVE
+        fibo (curr, next)
+      AS
+      ( SELECT 1,1
+        UNION ALL
+        SELECT next, curr+next FROM fibo
+        LIMIT #{n} )
+      SELECT curr, next FROM fibo;
+    SQL
+    }
+
+    rows = []
+    size = 0
+
+    assert_raises(RuntimeError) {
+      @db.query sql.call 2**16 do |row| # 65536 rows
+        rows << row
+        size += ObjectSpace.memsize_of row
+        row.each { |key, value| size += ObjectSpace.memsize_of value }
+        if size > 1024
+          raise "Limit exceeted with #{size} > 1024: #{rows.size} rows"
+        end
+      end
+    }
+
+    sql = ->(n) { <<-SQL
+      WITH RECURSIVE
+        f (t)
+      AS
+      ( SELECT 't'
+        UNION ALL
+        SELECT t || 't' FROM f
+        LIMIT #{n} )
+      SELECT t FROM f;
+    SQL
+    }
+
+    rows = []
+    size = 0
+
+    assert_raises(RuntimeError) {
+      @db.query sql.call 1024 do |row|
+        rows << row
+        # puts ObjectSpace.memsize_of row[:t]
+        size += ObjectSpace.memsize_of row
+        row.each { |key, value| size += ObjectSpace.memsize_of value }
+        if size > 10*1024
+          raise "Limit exceeted with #{size} > 10*1024: #{rows.size} rows"
+        end
+      end
+    }
+  end
+
+  def test_status
+    assert_operator 0, :<, @db.status(Extralite::SQLITE_DBSTATUS_SCHEMA_USED)&.first
   end
 end
 

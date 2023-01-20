@@ -22,6 +22,7 @@ extern VALUE cError;
 extern VALUE cSQLError;
 extern VALUE cBusyError;
 extern VALUE cInterruptError;
+extern VALUE cLimitError;
 
 extern ID ID_KEYS;
 extern ID ID_NEW;
@@ -30,6 +31,7 @@ extern ID ID_TO_S;
 
 typedef struct {
   sqlite3 *sqlite3_db;
+  unsigned long query_limit_bytes;
 } Database_t;
 
 typedef struct {
@@ -44,7 +46,13 @@ typedef struct {
   sqlite3 *sqlite3_db;
   sqlite3_stmt *stmt;
   VALUE params;
+  unsigned long limit_bytes;
 } query_ctx;
+
+typedef struct {
+  VALUE row;
+  size_t size;
+} row_estimate_t;
 
 typedef struct {
   VALUE dst;
@@ -68,5 +76,7 @@ int stmt_iterate(sqlite3_stmt *stmt, sqlite3 *db);
 VALUE cleanup_stmt(query_ctx *ctx);
 
 sqlite3 *Database_sqlite3_db(VALUE self);
+
+extern size_t rb_obj_memsize_of(VALUE obj);
 
 #endif /* EXTRALITE_H */
