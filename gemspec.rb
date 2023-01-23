@@ -23,4 +23,6 @@ def common_spec(s)
   s.add_development_dependency  'simplecov',            '0.17.1'
   s.add_development_dependency  'yard',                 '0.9.27'
   s.add_development_dependency  'sequel',               '5.51.0'
+  s.add_development_dependency  'activerecord'
+  s.add_development_dependency  'sqlite3'
 end
